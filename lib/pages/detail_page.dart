@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_pokemon/data/response/pokemon_detail_response.dart';
-import 'package:flutter_pokemon/data/services/pokemon_service.dart';
+import 'package:flutter_pokemon/data/services/pokemon_service_dio.dart';
+import 'package:flutter_pokemon/state/remote_state.dart';
 import 'package:flutter_pokemon/utils/pokemon_card_colors.dart';
 
 class PokemonDetailPage extends StatefulWidget {
@@ -13,64 +14,93 @@ class PokemonDetailPage extends StatefulWidget {
 }
 
 class _PokemonDetailPageState extends State<PokemonDetailPage> {
-  final PokemonService pokemonService = PokemonService();
-  PokemonDetailResponse? _pokemon;
-  bool _isLoading = true;
-  String? _errorMessage;
+  final PokemonServiceDio pokemonService = PokemonServiceDio();
+
+  RemoteState<PokemonDetailResponse> state = const RemoteStateLoading();
 
   @override
   void initState() {
     super.initState();
-    Future.microtask(_loadPokemon);
+    _loadPokemon();
   }
 
   Future<void> _loadPokemon() async {
-    try {
-      final result = await pokemonService.fetchPokemonDetail(widget.pokemonId);
-      if (!mounted) return;
-      setState(() {
-        _pokemon = result;
-        _isLoading = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _errorMessage = 'Failed to load Pokemon details';
-        _isLoading = false;
-      });
-    }
+    final result = await pokemonService.fetchPokemonDetail(widget.pokemonId);
+
+    if (!mounted) return;
+    setState(() => state = result);
   }
 
   @override
   Widget build(BuildContext context) {
-    final pokemon = _pokemon;
-
     Widget body;
-    if (_isLoading) {
+
+    if (state is RemoteStateLoading) {
       body = _PokemonDetailLoading(pokemonId: widget.pokemonId);
-    } else if (pokemon == null) {
+    } else if (state is RemoteStateError) {
+      final msg = (state as RemoteStateError).message;
+
       body = Center(
-        child: Text(
-          _errorMessage ?? 'Pokemon not found',
-          style: const TextStyle(fontWeight: FontWeight.w600),
-        ),
+        child: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
       );
-    } else {
+    } else if (state is RemoteStateSuccess<PokemonDetailResponse>) {
+      final pokemon = (state as RemoteStateSuccess<PokemonDetailResponse>).data;
+
       body = _PokemonDetailBody(pokemon: pokemon);
+    } else {
+      body = const SizedBox.shrink();
     }
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FB),
       appBar: AppBar(
-        elevation: 0,
         backgroundColor: Colors.transparent,
         foregroundColor: Colors.black87,
-        title: Text('Detail Pokemon - ${pokemon?.name ?? 'Loading...'}'),
+        elevation: 0,
+        title: Text("Detail Pokémon"),
       ),
       body: body,
     );
   }
 }
+
+// ===================== LOADING VIEW ======================
+
+class _PokemonDetailLoading extends StatelessWidget {
+  const _PokemonDetailLoading({required this.pokemonId});
+
+  final int pokemonId;
+
+  @override
+  Widget build(BuildContext context) {
+    final imageUrl = _imageUrlFor(pokemonId);
+
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Hero(
+            tag: "pokemon-image-$pokemonId",
+            child: Image.network(
+              imageUrl,
+              height: 160,
+              fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) => const Icon(
+                Icons.catching_pokemon,
+                size: 120,
+                color: Colors.black26,
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+          const CircularProgressIndicator(),
+        ],
+      ),
+    );
+  }
+}
+
+// ===================== SUCCESS VIEW ======================
 
 class _PokemonDetailBody extends StatelessWidget {
   const _PokemonDetailBody({required this.pokemon});
@@ -87,7 +117,7 @@ class _PokemonDetailBody extends StatelessWidget {
           _HeroCard(pokemon: pokemon),
           const SizedBox(height: 28),
           Text(
-            'About',
+            "About",
             style: Theme.of(
               context,
             ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
@@ -100,38 +130,7 @@ class _PokemonDetailBody extends StatelessWidget {
   }
 }
 
-class _PokemonDetailLoading extends StatelessWidget {
-  const _PokemonDetailLoading({required this.pokemonId});
-
-  final int pokemonId;
-
-  @override
-  Widget build(BuildContext context) {
-    final imageUrl = _imageUrlFor(pokemonId);
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Hero(
-            tag: 'pokemon-image-$pokemonId',
-            child: Image.network(
-              imageUrl,
-              height: 160,
-              fit: BoxFit.contain,
-              errorBuilder: (context, error, stackTrace) => const Icon(
-                Icons.catching_pokemon,
-                color: Colors.black26,
-                size: 120,
-              ),
-            ),
-          ),
-          const SizedBox(height: 24),
-          const CircularProgressIndicator(),
-        ],
-      ),
-    );
-  }
-}
+// ===================== HERO CARD ======================
 
 class _HeroCard extends StatelessWidget {
   const _HeroCard({required this.pokemon});
@@ -141,11 +140,12 @@ class _HeroCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cardColor = cardColorForName(pokemon.name);
-    final formattedNumber = _formattedNumber(pokemon.id);
-    final heroTag = 'pokemon-image-${pokemon.id}';
+    final numberLabel = _formattedNumber(pokemon.id);
+    final heroTag = "pokemon-image-${pokemon.id}";
     final imageUrl = _imageUrlFor(pokemon.id);
+
     final typeLabels = pokemon.types
-        .map((type) => _capitalize(type.type.name))
+        .map((t) => _capitalize(t.type.name))
         .toList();
 
     return Container(
@@ -168,6 +168,7 @@ class _HeroCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Name + ID
           Row(
             children: [
               Expanded(
@@ -184,7 +185,7 @@ class _HeroCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      formattedNumber,
+                      numberLabel,
                       style: const TextStyle(
                         color: Colors.white70,
                         fontSize: 16,
@@ -195,20 +196,26 @@ class _HeroCard extends StatelessWidget {
               ),
               IconButton(
                 onPressed: () {},
-                icon: const Icon(Icons.favorite_border),
                 color: Colors.white,
+                icon: const Icon(Icons.favorite_border),
               ),
             ],
           ),
+
           const SizedBox(height: 12),
+
+          // Type Chips
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: typeLabels
-                .map((t) => _PokemonTypeChip(label: t))
+                .map((label) => _PokemonTypeChip(label: label))
                 .toList(),
           ),
+
           const SizedBox(height: 24),
+
+          // Artwork
           Align(
             alignment: Alignment.center,
             child: Hero(
@@ -217,10 +224,10 @@ class _HeroCard extends StatelessWidget {
                 imageUrl,
                 height: 170,
                 fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) => const Icon(
+                errorBuilder: (_, __, ___) => const Icon(
                   Icons.catching_pokemon,
-                  color: Colors.white54,
                   size: 120,
+                  color: Colors.white54,
                 ),
               ),
             ),
@@ -231,6 +238,8 @@ class _HeroCard extends StatelessWidget {
   }
 }
 
+// ===================== ABOUT CARD ======================
+
 class _AboutCard extends StatelessWidget {
   const _AboutCard({required this.pokemon});
 
@@ -238,12 +247,9 @@ class _AboutCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final heightMeters = pokemon.height / 10;
-    final weightKg = pokemon.weight / 10;
-    final typeText = pokemon.types.isEmpty
-        ? 'Unknown'
-        : pokemon.types.map((t) => _capitalize(t.type.name)).join(', ');
-    final description = _descriptionForPokemon(pokemon, typeText);
+    final height = (pokemon.height / 10).toStringAsFixed(1);
+    final weight = (pokemon.weight / 10).toStringAsFixed(1);
+    final types = pokemon.types.map((t) => _capitalize(t.type.name)).join(", ");
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -252,8 +258,8 @@ class _AboutCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(28),
         boxShadow: const [
           BoxShadow(
-            color: Color(0x14000000),
             blurRadius: 25,
+            color: Color(0x14000000),
             offset: Offset(0, 12),
           ),
         ],
@@ -261,18 +267,15 @@ class _AboutCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _InfoRow(label: 'ID', value: _formattedNumber(pokemon.id)),
-          _InfoRow(label: 'Types', value: typeText),
-          _InfoRow(
-            label: 'Height',
-            value: '${heightMeters.toStringAsFixed(1)} m',
-          ),
-          _InfoRow(label: 'Weight', value: '${weightKg.toStringAsFixed(1)} kg'),
+          _InfoRow(label: "ID", value: _formattedNumber(pokemon.id)),
+          _InfoRow(label: "Types", value: types),
+          _InfoRow(label: "Height", value: "$height m"),
+          _InfoRow(label: "Weight", value: "$weight kg"),
           const SizedBox(height: 16),
           const Divider(),
           const SizedBox(height: 16),
           Text(
-            description,
+            "${_capitalize(pokemon.name)} is a $types Pokémon weighing $weight kg with a height of $height m.",
             style: const TextStyle(color: Colors.black87, height: 1.4),
           ),
         ],
@@ -280,6 +283,8 @@ class _AboutCard extends StatelessWidget {
     );
   }
 }
+
+// ===================== SHARED COMPONENTS ======================
 
 class _InfoRow extends StatelessWidget {
   const _InfoRow({required this.label, required this.value});
@@ -342,19 +347,14 @@ class _PokemonTypeChip extends StatelessWidget {
   }
 }
 
-String _formattedNumber(int id) => '#${id.toString().padLeft(3, '0')}';
+// ===================== HELPERS ======================
+
+String _capitalize(String text) {
+  if (text.isEmpty) return text;
+  return text[0].toUpperCase() + text.substring(1);
+}
+
+String _formattedNumber(int id) => "#${id.toString().padLeft(3, "0")}";
 
 String _imageUrlFor(int id) =>
-    'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/$id.png';
-
-String _capitalize(String value) {
-  if (value.isEmpty) return value;
-  return value[0].toUpperCase() + value.substring(1);
-}
-
-String _descriptionForPokemon(PokemonDetailResponse pokemon, String typeText) {
-  final displayName = _capitalize(pokemon.name);
-  final height = (pokemon.height / 10).toStringAsFixed(1);
-  final weight = (pokemon.weight / 10).toStringAsFixed(1);
-  return '$displayName is a $typeText Pokemon with a height of $height m and a weight of $weight kg.';
-}
+    "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/$id.png";

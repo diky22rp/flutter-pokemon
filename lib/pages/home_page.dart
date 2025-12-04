@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_pokemon/data/response/pokemon_list_response.dart';
-import 'package:flutter_pokemon/data/services/pokemon_service.dart';
+import 'package:flutter_pokemon/data/services/pokemon_service_dio.dart';
 import 'package:flutter_pokemon/pages/detail_page.dart';
+import 'package:flutter_pokemon/state/remote_state.dart';
 import 'package:flutter_pokemon/utils/pokemon_card_colors.dart';
 
 class HomePage extends StatefulWidget {
@@ -12,29 +13,77 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  PokemonService pokemonService = PokemonService();
+  RemoteState<PokemonListResponse> state = const RemoteStateLoading();
+  final PokemonServiceDio pokemonService = PokemonServiceDio();
+
+  int offset = 0;
+  final int limit = 10;
+  bool isLoadingMore = false;
+
   List<Result> pokemonList = [];
+
+  final ScrollController scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    Future.microtask(() async {
-      try {
-        final result = await pokemonService.fetchPokemons();
-        if (mounted) {
-          setState(() {
-            pokemonList = result.results;
-          });
-        }
-      } catch (e) {
-        debugPrint('Error fetching pokemons: $e');
+    loadPokemons();
+
+    scrollController.addListener(() {
+      if (!isLoadingMore &&
+          scrollController.position.pixels >=
+              scrollController.position.maxScrollExtent - 200) {
+        loadMore();
       }
     });
+  }
+
+  // LOAD PERTAMA
+  Future<void> loadPokemons() async {
+    final result = await pokemonService.fetchPokemons(
+      offset: offset,
+      limit: limit,
+    );
+
+    if (!mounted) return;
+
+    if (result is RemoteStateSuccess<PokemonListResponse>) {
+      pokemonList = result.data.results;
+    }
+
+    setState(() => state = result);
+  }
+
+  // LOAD BERIKUTNYA SAAT SCROLL
+  Future<void> loadMore() async {
+    if (isLoadingMore) return;
+
+    setState(() => isLoadingMore = true);
+
+    offset += limit;
+
+    final result = await pokemonService.fetchPokemons(
+      offset: offset,
+      limit: limit,
+    );
+
+    if (result is RemoteStateSuccess<PokemonListResponse>) {
+      final newData = result.data.results;
+
+      if (newData.isNotEmpty) {
+        setState(() {
+          pokemonList.addAll(newData);
+        });
+      }
+    }
+
+    setState(() => isLoadingMore = false);
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FB),
       body: SafeArea(
@@ -45,27 +94,53 @@ class _HomePageState extends State<HomePage> {
             children: [
               _HomeHeader(theme: theme),
               const SizedBox(height: 24),
-              Expanded(
-                child: GridView.builder(
-                  physics: const BouncingScrollPhysics(),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    mainAxisSpacing: 20,
-                    crossAxisSpacing: 20,
-                    childAspectRatio: 0.9,
-                  ),
-                  itemCount: pokemonList.length,
-                  itemBuilder: (context, index) {
-                    final pokemon = pokemonList[index];
-                    return PokemonCard(pokemon: pokemon);
-                  },
-                ),
-              ),
+              Expanded(child: _buildBody()),
             ],
           ),
         ),
       ),
     );
+  }
+
+  Widget _buildBody() {
+    // LOADING
+    if (state is RemoteStateLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    // ERROR
+    if (state is RemoteStateError) {
+      final message = (state as RemoteStateError).message;
+      return Center(child: Text("Error: $message"));
+    }
+
+    // SUCCESS
+    if (state is RemoteStateSuccess<PokemonListResponse>) {
+      return GridView.builder(
+        controller: scrollController,
+        physics: const BouncingScrollPhysics(),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          mainAxisSpacing: 20,
+          crossAxisSpacing: 20,
+          childAspectRatio: 0.9,
+        ),
+        itemCount: pokemonList.length + 1,
+        itemBuilder: (context, index) {
+          // Loading indicator di bawah list
+          if (index == pokemonList.length) {
+            return isLoadingMore
+                ? const Center(child: CircularProgressIndicator())
+                : const SizedBox.shrink();
+          }
+
+          final pokemon = pokemonList[index];
+          return PokemonCard(pokemon: pokemon);
+        },
+      );
+    }
+
+    return const SizedBox.shrink();
   }
 }
 
@@ -197,12 +272,11 @@ class PokemonCard extends StatelessWidget {
                       : Image.network(
                           imageUrl,
                           fit: BoxFit.contain,
-                          errorBuilder: (context, error, stackTrace) =>
-                              const Icon(
-                                Icons.catching_pokemon,
-                                color: Colors.white54,
-                                size: 72,
-                              ),
+                          errorBuilder: (_, __, ___) => const Icon(
+                            Icons.catching_pokemon,
+                            color: Colors.white54,
+                            size: 72,
+                          ),
                         ),
                 ),
               ),
